@@ -117,3 +117,4 @@ notebooks/checkpoints/
 *.lock
 *.npy
 *.pdf
+*.pt
