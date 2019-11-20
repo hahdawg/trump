@@ -1,8 +1,15 @@
 import collections
+from datetime import datetime
+import importlib
+import logging
+import os
 import numpy as np
 import torch
 from torch.autograd import Variable
 import torch.nn as nn
+
+
+from . import config
 
 
 class Trainer(nn.Module):
@@ -14,16 +21,64 @@ class Trainer(nn.Module):
         num_epochs=100000,
         batch_size=256,
         log_interval=100,
+        min_steps_to_checkpoint=10000,
+        checkpoint_interval=2500
     ):
         super(Trainer, self).__init__()
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"using device {self.device}")
         self.num_classes = num_classes
         self.learning_rate = learning_rate
         self.num_epochs = num_epochs
         self.batch_size = batch_size
         self.log_interval = log_interval
+        self.min_steps_to_checkpoint = min_steps_to_checkpoint
+        self.checkpoint_interval = checkpoint_interval
+        self.num_checkpoint_samples = 10
+
+        self._init_logging()
+
+    def _init_logging(self):
+        """
+        Initialize logging.
+        """
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M')
+        log_file = f"log_{timestamp}.log"
+        importlib.reload(logging)
+        logging.basicConfig(
+            filename=os.path.join(config.log_dir, log_file),
+            level=logging.INFO,
+            format='[[%(asctime)s]] %(message)s',
+            datefmt='%m/%d/%Y %I:%M:%S %p'
+        )
+
+        logging.getLogger().addHandler(logging.StreamHandler())
+
+    @staticmethod
+    def _compute_model_path(step):
+        filename = f"model_step_{step}.pt"
+        path = os.path.join(config.model_dir, filename)
+        return path
+
+    def restore(self, step):
+        """
+        Restore model from checkpoint.
+        """
+        path = self._compute_model_path(step)
+        checkpoint = torch.load(path)
+        restore_log = "restoring model from step {} with loss {}".format(checkpoint["step"], checkpoint["loss"])
+        logging.info(restore_log)
+        self.load_state_dict(checkpoint["model_state_dict"])
+        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    def save(self, step, loss):
+        path = self._compute_model_path(step)
+        torch.save({
+            "step": step,
+            "model_state_dict": self.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "loss": loss
+        }, path)
 
     @property
     def optimizer(self):
@@ -34,6 +89,8 @@ class Trainer(nn.Module):
         return nn.CrossEntropyLoss()
 
     def fit(self, X, decoder):
+        logging.info("New training run.")
+        logging.info(self.__repr__())
         self.to(self.device)
         X = torch.from_numpy(X).long()
         X = X.to(self.device)
@@ -54,8 +111,16 @@ class Trainer(nn.Module):
                 running_loss.append(loss.item())
 
                 if num_steps % self.log_interval == 0:
-                    print(num_steps, np.mean(running_loss))
-                    print(self.generate_tweet(12, decoder))
+                    logging.info(f"step: [{num_steps}]      loss: [[{np.mean(running_loss)}]]]")
+                    logging.info(self.generate_tweet(12, decoder))
+
+                if (num_steps > self.min_steps_to_checkpoint) & (num_steps % self.log_interval == 0):
+                    logging.info(f"Generating chekpoint at step {num_steps}.")
+                    self.save(num_steps, np.mean(running_loss))
+                    logging.info("Sample tweets:")
+                    for j in range(self.num_checkpoint_samples):
+                        tweet = self.generate_tweet(12, decoder)
+                        logging.info(f"{j}: {tweet}")
 
                 num_steps += 1
 
