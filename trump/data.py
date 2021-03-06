@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from . import config
+from trump import config
 
 STOP_CHAR = "\u2665"
 PAD_CHAR = "\u2666"
